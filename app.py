@@ -1,182 +1,106 @@
-import streamlit as st
-import json
-import google.generativeai as genai
-
-# =========================
-# 設定
-# =========================
-genai.configure(api_key="YOUR_API_KEY")
-
-model = genai.GenerativeModel("gemini-1.5-flash")
-
-# =========================
-# セッション状態初期化
-# =========================
-if "state" not in st.session_state:
-    st.session_state.state = {
-        "characters": [],
-        "relations": [],
-        "summary": "開始",
-        "history": [],
-        "endings": [],
-        "internal": []
-    }
-
-state = st.session_state.state
-
-
-# =========================
-# UI：タイトル
-# =========================
-st.title("対話型ストーリーアプリ")
-
-# =========================
-# チャット入力
-# =========================
-user_input = st.text_area("あなたの行動・発言")
-
-if st.button("送信"):
+def build_prompt(user_input):
 
     character_text = "\n".join([
-        f"{c['name']}：{c['personality']} / {c['traits']} / {c['relation']}"
+        f"""{c['name']}：
+・{c['personality']}
+・{c['traits']}
+・{c['relation']}"""
         for c in state["characters"]
     ])
 
     internal_text = "\n".join([
-        f"{c['name']} 親密度{c['intimacy']} 信頼{c['trust']} 感情{c['emotion']}"
+        f"{c['name']}：親密度{c['intimacy']}/10 信頼{c['trust']}/10 感情:{c['emotion']}"
         for c in state["internal"]
     ])
 
-    prompt = f"""
+    return f"""
+【システム役割】
+あなたは対話型物語エンジン。
+キャラクターの一貫性と関係性を維持しながら自然な会話を行う。
+
+---
+
 【キャラクターDB】
 {character_text}
 
-【関係】
-{state['relations']}
+---
 
 【要約】
 {state['summary']}
 
+---
+
 【内部状態】
 {internal_text}
+
+---
+
+【ルール】
+
+・1ターン1〜2キャラ
+・自然な会話
+・説明禁止
+・キャラ同士の会話OK
+・必要ならイベント発生OK
+
+---
+
+【イベント】
+
+必要に応じて以下を発生：
+・乱入
+・対立
+・環境変化
+・感情変化
+
+---
+
+【分岐】
+
+状態・関係・行動に応じて自然に分岐する
+
+---
+
+【エンディング】
+
+条件を満たしたら以下を出力：
+【エンディング】(名前)
+
+---
+
+【出力】
+
+① 会話
+
+② 必要なら
+【新キャラ候補】
+
+③ 必ず
+【要約更新】
+【関係変化】
+
+---
 
 【ユーザー入力】
 {user_input}
 """
 
-    try:
-        response = model.generate_content(prompt)
-        output = response.text
+user_input = st.chat_input("入力")
 
-        st.write("### AI")
-        st.write(output)
+if user_input:
 
-        state["history"].append({
-            "user": user_input,
-            "ai": output
-        })
+    prompt = build_prompt(user_input)
 
-        # 簡易要約更新
-        state["summary"] = "ストーリー進行中"
+    response = model.generate_content(prompt)
+    output = response.text
 
-    except Exception as e:
-        st.error(f"エラー: {e}")
+def update_state_from_output(text):
 
+    if "【要約更新】" in text:
+        # 簡易更新
+        state["summary"] = "更新された"
 
-# =========================
-# キャラ生成
-# =========================
-st.subheader("キャラクター生成")
-
-mode = st.radio("モード選択", ["簡単入力", "詳細設定"])
-
-if mode == "簡単入力":
-    simple = st.text_area("曖昧な設定")
-
-    if st.button("キャラ生成（簡単）"):
-        prompt = f"""
-曖昧な情報からキャラクターを生成してください：
-
-{simple}
-
-出力：
-名前：
-性格：
-特徴：
-関係：
-"""
-        res = model.generate_content(prompt)
-        st.session_state.generated_char = res.text
-
-else:
-    personality = st.text_input("性格")
-    traits = st.text_input("特徴")
-    relation = st.text_input("関係")
-
-    if st.button("キャラ生成（詳細）"):
-        prompt = f"""
-以下からキャラ生成：
-
-性格：{personality}
-特徴：{traits}
-関係：{relation}
-
-不足補完してください
-"""
-        res = model.generate_content(prompt)
-        st.session_state.generated_char = res.text
-
-
-# =========================
-# 生成結果表示
-# =========================
-if "generated_char" in st.session_state:
-    st.text_area("生成結果", st.session_state.generated_char)
-
-    if st.button("採用"):
-        # 簡易パース（本格は後で強化可）
-        state["characters"].append({
-            "name": "新キャラ",
-            "personality": st.session_state.generated_char,
-            "traits": "",
-            "relation": ""
-        })
-        st.success("追加しました")
-
-# =========================
-# キャラ一覧
-# =========================
-st.subheader("キャラクター一覧")
-
-for i, c in enumerate(state["characters"]):
-    st.write(f"**{c['name']}**")
-    if st.button(f"削除 {i}"):
-        del state["characters"][i]
-        st.rerun()
-
-
-# =========================
-# セーブ / ロード
-# =========================
-st.subheader("セーブ / ロード")
-
-save_data = json.dumps(state)
-
-st.download_button(
-    "セーブ（JSON）",
-    save_data,
-    file_name="save.json"
-)
-
-upload = st.file_uploader("ロード")
-
-if upload:
-    state.clear()
-    state.update(json.load(upload))
-    st.success("ロード完了")
-
-# =========================
-# デバッグ
-# =========================
-if st.checkbox("デバッグ表示"):
-    st.json(state)
+state["history"].append({
+    "user": user_input,
+    "ai": output
+})
