@@ -11,124 +11,93 @@ genai.configure(api_key="YOUR_API_KEY")
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # =========================
-# 状態管理（state）
+# state（記憶）
 # =========================
 if "state" not in st.session_state:
     st.session_state.state = {
         "characters": [],
-        "relations": [],
         "summary": "開始",
         "history": [],
-        "endings": [],
-        "internal": []
+        "relations": [],
+        "endings": []
     }
 
 state = st.session_state.state
 
 # =========================
-# プロンプト構築（超重要）
+# プロンプト生成
 # =========================
 def build_prompt(user_input):
 
-    character_text = "\n".join([
-        f"""{c['name']}：
-・{c['personality']}
-・{c.get('traits','')}
-・{c.get('relation','')}"""
+    char_text = "\n".join([
+        f"{c['name']}：{c['personality']}"
         for c in state["characters"]
     ])
 
-    internal_text = "\n".join([
-        f"{c['name']}：親密度{c['intimacy']}/10 信頼{c['trust']}/10 感情:{c['emotion']}"
-        for c in state["internal"]
-    ])
-
     return f"""
-【役割】
-あなたは対話型物語エンジン。
+あなたは対話型ストーリーAIです。
 
-【キャラクターDB】
-{character_text}
+【キャラクター】
+{char_text}
 
-【要約】
-{state['summary']}
-
-【内部状態】
-{internal_text}
+【これまで】
+{state["summary"]}
 
 【ルール】
 ・自然な会話
-・1〜2キャラのみ登場
-・キャラ同士会話OK
-・説明禁止
-
-【イベント】
-必要なら発生可：
-・対立
-・環境変化
-・乱入
-・感情変化
-
-【分岐】
-関係・行動に応じて変化
+・1〜2人のみ登場
+・説明しない
+・必要ならイベント
 
 【エンディング】
-到達した場合：
-【エンディング】(内容)
+条件満たしたら：
+【エンディング】と出力
 
 【出力】
-① 会話
-② 必要なら【新キャラ候補】
-③ 必ず：
-【要約更新】
-【関係変化】
+①会話
+②【要約更新】
+③【関係変化】
 
 【ユーザー入力】
 {user_input}
 """
 
 # =========================
-# 状態更新（パーサ）
+# AI出力の解析（パーサ）
 # =========================
-def update_state_from_output(text):
+def update_state(output_text):
 
     # 要約更新
-    summary_match = re.search(r"【要約更新】(.+)", text)
-    if summary_match:
-        state["summary"] = summary_match.group(1)
+    match = re.search(r"【要約更新】(.+)", output_text)
+    if match:
+        state["summary"] = match.group(1)
 
-    # 関係変化（簡易）
-    rels = re.findall(r"(.+?)→(.+?)：(.+)", text)
-    for r in rels:
-        state["relations"].append({
-            "from": r[0],
-            "to": r[1],
-            "type": r[2]
-        })
-
-    # エンディング
-    if "【エンディング】" in text:
-        state["endings"].append(text)
+    # エンディング検出
+    if "【エンディング】" in output_text:
+        state["endings"].append(output_text)
 
 # =========================
-# UI（タブ）
+# UI
 # =========================
+
 tab1, tab2, tab3 = st.tabs(["💬 チャット", "🧑 キャラ", "⚙ 設定"])
 
 # =========================
-# ✅ チャット
+# チャット
 # =========================
 with tab1:
 
     st.title("対話型ストーリー")
 
+    # 履歴表示
     for h in state["history"]:
         with st.chat_message("user"):
             st.write(h["user"])
         with st.chat_message("assistant"):
             st.write(h["ai"])
 
-    user_input = st.chat_input("行動やセリフを入力")
+    # 入力欄
+    user_input = st.chat_input("メッセージを入力")
 
     if user_input:
 
@@ -137,82 +106,81 @@ with tab1:
         with st.chat_message("user"):
             st.write(user_input)
 
-        try:
-            with st.chat_message("assistant"):
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            output = ""
 
-                placeholder = st.empty()
-                output = ""
-
+            try:
                 response = model.generate_content(prompt)
                 text = response.text
 
-                # ストリーミング風表示
-                for char in text:
-                    output += char
+                # ストリーミング風
+                for ch in text:
+                    output += ch
                     placeholder.write(output)
 
-            # 履歴保存
-            state["history"].append({
-                "user": user_input,
-                "ai": output
-            })
+            except Exception as e:
+                st.error(e)
+                output = "エラーが発生しました"
 
-            # 状態更新
-            update_state_from_output(output)
+        # 保存
+        state["history"].append({
+            "user": user_input,
+            "ai": output
+        })
 
-        except Exception as e:
-            st.error(f"エラー: {e}")
+        # state更新
+        update_state(output)
 
 # =========================
-# ✅ キャラ管理
+# キャラ管理
 # =========================
 with tab2:
 
     st.title("キャラクター")
 
-    mode = st.radio("モード", ["簡単", "詳細"])
+    name = st.text_input("名前")
+    personality = st.text_input("性格")
 
-    if mode == "簡単":
-        simple = st.text_area("ざっくり設定")
-
-        if st.button("生成"):
-            prompt = f"""
-            以下からキャラクター生成：
-
-            {simple}
-
-            出力：
-            名前：
-            性格：
-            特徴：
-            """
-            res = model.generate_content(prompt)
-            st.session_state.gen_char = res.text
-
-    else:
-        name = st.text_input("名前")
-        personality = st.text_input("性格")
-
-        if st.button("生成（詳細）"):
-            st.session_state.gen_char = f"""
-名前：{name}
-性格：{personality}
-"""
-
-    if "gen_char" in st.session_state:
-        st.text_area("生成結果", st.session_state.gen_char)
-
-        if st.button("採用"):
+    if st.button("追加"):
+        if name and personality:
             state["characters"].append({
-                "name": "キャラ",
-                "personality": st.session_state.gen_char,
-                "traits": "",
-                "relation": ""
+                "name": name,
+                "personality": personality
             })
             st.success("追加しました")
+        else:
+            st.warning("入力してください")
 
     st.divider()
 
     st.subheader("一覧")
 
+    if len(state["characters"]) == 0:
+        st.write("まだキャラがいません")
+
     for i, c in enumerate(state["characters"]):
+
+        col1, col2 = st.columns([4,1])
+
+        with col1:
+            st.write(f"**{c['name']}** - {c['personality']}")
+
+        with col2:
+            if st.button("削除", key=f"del{i}"):
+                state["characters"].pop(i)
+                st.rerun()
+
+# =========================
+# 設定
+# =========================
+with tab3:
+
+    st.title("設定")
+
+    if st.checkbox("デバッグ表示"):
+        st.json(state)
+
+    if st.button("履歴クリア"):
+        state["history"] = []
+        st.success("クリアしました")
