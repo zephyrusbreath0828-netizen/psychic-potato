@@ -5,11 +5,10 @@ genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-st.title("テスト")
+st.title("動作確認")
 
-user_input = st.chat_input("入力してください")
+user_input = st.text_input("入力")
 
 if user_input:
-    with st.spinner("考え中..."):
-        response = model.generate_content(user_input)
-        st.write(response.text)
+    response = model.generate_content(user_input)
+    st.write(response.text)
